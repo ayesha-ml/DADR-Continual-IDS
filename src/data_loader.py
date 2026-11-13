@@ -16,14 +16,32 @@ class ContinualIDSDataLoader:
         self.feature_names = []
         self.class_names = []
 
+    def _chronological_sort_key(self, filepath):
+        # enforcing true monday-to-friday chronological file order for cicids2017
+        name = os.path.basename(filepath).lower()
+        day_order = [
+            "monday",
+            "tuesday",
+            "wednesday",
+            "thursday-workinghours-morning",
+            "thursday-workinghours-afternoon",
+            "friday-workinghours-morning",
+            "friday-workinghours-afternoon-portscan",
+            "friday-workinghours-afternoon-ddos",
+        ]
+        for idx, prefix in enumerate(day_order):
+            if prefix in name:
+                return (idx, name)
+        return (len(day_order), name)
+
     def _find_csv_files(self, data_dir):
-        # finding all csv files inside the target directory
-        files = sorted(glob.glob(os.path.join(data_dir, "*.csv")))
+        # finding and chronologically ordering all csv files inside target directory
+        files = glob.glob(os.path.join(data_dir, "*.csv"))
         if not files:
             raise FileNotFoundError(
                 f"no csv files found in {data_dir}. please place dataset csvs there."
             )
-        return files
+        return sorted(files, key=self._chronological_sort_key)
 
     def _clean_dataframe(self, df):
         # stripping whitespace from column headers
@@ -81,7 +99,7 @@ class ContinualIDSDataLoader:
         return X_windows
 
     def load_and_split(self, data_dir=None, max_rows_per_file=None):
-        # loading csv files from drive and constructing chronological stream
+        # loading csv files from drive in chronological order and constructing stream
         target_dir = data_dir or os.path.join(Config.RAW_DATA_DIR, self.dataset_name)
         csv_files = self._find_csv_files(target_dir)
 

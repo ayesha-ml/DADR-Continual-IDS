@@ -1,3 +1,4 @@
+import gc
 import glob
 import os
 import numpy as np
@@ -75,13 +76,12 @@ class ContinualIDSDataLoader:
         # keeping numeric columns only and replacing infinities
         X_df = X_df.select_dtypes(include=[np.number])
         X_df = X_df.replace([np.inf, -np.inf], np.nan).dropna()
-        y_raw = y_raw.loc[X_df.index].reset_index(drop=True)
-        X_df = X_df.reset_index(drop=True)
+        y_vals = y_raw.loc[X_df.index].values
 
         # downcasting features to float32 for colab memory efficiency
-        X_df = X_df.astype(np.float32)
         self.feature_names = list(X_df.columns)
-        return X_df.values, y_raw.values
+        X_vals = X_df.to_numpy(dtype=np.float32, copy=True)
+        return X_vals, y_vals
 
     def _inject_normal_drift(self, X_windows, y_windows, normal_idx):
         # applying covariate shift to normal flows from drift window onward for scenario s3
@@ -99,17 +99,24 @@ class ContinualIDSDataLoader:
         return X_windows
 
     def load_and_split(self, data_dir=None, max_rows_per_file=None):
-        # loading csv files from drive in chronological order and constructing stream
+        # loading and cleaning each csv sequentially to keep peak system ram under 3gb
         target_dir = data_dir or os.path.join(Config.RAW_DATA_DIR, self.dataset_name)
         csv_files = self._find_csv_files(target_dir)
 
-        dfs = []
+        X_chunks = []
+        y_chunks = []
         for f in csv_files:
-            chunk = pd.read_csv(f, nrows=max_rows_per_file, low_memory=False)
-            dfs.append(chunk)
-        full_df = pd.concat(dfs, ignore_index=True)
+            chunk_df = pd.read_csv(f, nrows=max_rows_per_file, low_memory=False)
+            X_c, y_c = self._clean_dataframe(chunk_df)
+            X_chunks.append(X_c)
+            y_chunks.append(y_c)
+            del chunk_df
+            gc.collect()
 
-        X, y_str = self._clean_dataframe(full_df)
+        X = np.concatenate(X_chunks, axis=0)
+        y_str = np.concatenate(y_chunks, axis=0)
+        del X_chunks, y_chunks
+        gc.collect()
 
         # encoding class labels while ensuring normal is always index 0
         unique_classes = sorted(list(set(y_str)))
@@ -122,17 +129,19 @@ class ContinualIDSDataLoader:
         class_to_idx = {cls: idx for idx, cls in enumerate(ordered_classes)}
         self.class_names = ordered_classes
         y = np.array([class_to_idx[label] for label in y_str], dtype=np.int64)
+        del y_str
+        gc.collect()
 
         # splitting chronologically into initial training window and 10 stream windows
         n_total = len(X)
         n_init = int(n_total * Config.INIT_TRAIN_RATIO)
 
-        X_init, y_init = X[:n_init], y[:n_init]
-        X_stream, y_stream = X[n_init:], y[n_init:]
-
-        # fitting standard scaler strictly on initial window to guarantee zero data leakage
-        X_init = self.scaler.fit_transform(X_init).astype(np.float32)
-        X_stream = self.scaler.transform(X_stream).astype(np.float32)
+        X_init = self.scaler.fit_transform(X[:n_init]).astype(np.float32)
+        y_init = y[:n_init].copy()
+        X_stream = self.scaler.transform(X[n_init:]).astype(np.float32)
+        y_stream = y[n_init:].copy()
+        del X, y
+        gc.collect()
 
         # partitioning remaining stream into 10 equal chronological windows
         X_windows = np.array_split(X_stream, Config.NUM_STREAM_WINDOWS)

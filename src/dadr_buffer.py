@@ -104,7 +104,7 @@ class DADRReplayBuffer:
 
         # replacing up to half the normal pool (or incoming count) with fresh normal flows
         num_to_replace = min(
-            len(X_norm), max(1, int(self.normal_capacity * 0.5))
+            len(X_norm), max(1, int(self.normal_capacity * 0.9))
         )
 
         # ranking stored normal samples by distance from incoming normal distribution

@@ -48,7 +48,7 @@ class PSIDriftDetector:
             for j in range(num_features)
         ]
 
-        mean_psi = float(np.mean(feature_psis))
+        mean_psi = float(np.median(feature_psis))
         max_psi = float(np.max(feature_psis))
         drift_detected = bool(mean_psi >= self.threshold)
 

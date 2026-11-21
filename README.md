@@ -4,196 +4,366 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-ee4c2c.svg)](https://pytorch.org/)
 [![Dataset](https://img.shields.io/badge/Dataset-CIC--IDS2017-green.svg)](https://www.unb.ca/cic/datasets/ids-2017.html)
 
-**DADR (Drift-Aware Dual-Pool Experience Replay)** is a memory-bounded continual learning framework for streaming Network Intrusion Detection Systems (NIDS). Under evolving cyber-threat streams characterized by severe class imbalance, abrupt concept drift, and emerging attack families, DADR decouples memory allocation into a **Class-Balanced Attack Pool (70%)** and a **Reservoir Normal Anchor Pool (30%)**, governed by an unsupervised **Population Stability Index (PSI) Drift Detector** that triggers targeted replay buffer refreshes upon distribution shift.
+**DADR (Drift-Aware Dual-Pool Experience Replay)** is a memory-bounded continual learning approach for network intrusion detection. It addresses the challenges of changing network traffic, class imbalance, and the arrival of new attack classes.
+
+DADR uses two separate replay pools: a class-balanced attack pool and a normal-traffic pool. A Population Stability Index (PSI) detector monitors changes in normal-traffic feature distributions and triggers a partial refresh of the normal pool when drift is detected.
+
+The framework is evaluated on CIC-IDS2017 using chronological traffic streams, two evaluation scenarios, multiple replay and continual learning baselines, and three random seeds.
 
 ---
 
-## Key Contributions & Highlights
+## 1. Key Features
 
-1. **Dual-Pool Memory Decoupling (70% Attack / 30% Normal):** Standard class-balanced replay fails under sudden, heavily imbalanced attack streams (S3), producing 1,688.47 false alerts per 10k flows (ER-ClassBalanced). Reserving 30% of replay capacity strictly for benign traffic anchors the normal decision boundary and reduces false alerts by 73.3% (450.18 vs. 1,688.47 per 10k flows) while maintaining 79.54% cumulative attack recall.
+- **Dual-pool replay memory:** Divides a fixed memory budget between attack and normal traffic, using a 70:30 allocation.
+- **Class-balanced attack memory:** Maintains separate memory allocations for observed attack classes.
+- **Normal-traffic reservoir sampling:** Uses reservoir sampling to maintain a representative sample of normal traffic.
+- **PSI-based drift detection:** Monitors changes in normal-traffic feature distributions.
+- **Partial memory refresh:** Replaces up to 35% of the normal-pool capacity when drift is detected, subject to the availability of incoming normal samples.
+- **Dynamic class expansion:** Extends the classifier output layer when new attack classes appear.
+- **Multiple baselines:** Compares DADR with fine-tuning, regularization, replay-based methods, and an offline Joint training reference.
 
-2. **Unsupervised PSI-Triggered Drift Refresh:** Monitoring streaming feature distributions via Population Stability Index (PSI > 0.20) detects sudden concept drift without requiring ground-truth labels at inference time. It refreshes stale buffer samples while maintaining zero false triggers under stationary/sequential streams (S1).
+## 2. Architecture Overview
 
-3. **Sub-Linear Streaming Efficiency:** Across 14 sequential traffic windows on CIC-IDS2017, DADR completes streaming training and evaluation in approximately 209 seconds (7.2x faster than offline Joint retraining at 1,511 seconds) within a fixed 5,000-sample memory budget.
-
----
-
-## Architecture Overview
+DADR consists of three main components:
 
 ```text
-Streaming Traffic Window (W_t)
-│
-├──► [1] Unsupervised PSI Drift Monitor (tau_PSI = 0.20)
-│         └──► Detects feature distribution shift
-│              └──► Triggers Dual-Pool Refresh
-│
-├──► [2] Dual-Pool Replay Buffer (Total Capacity B = 5,000)
-│         ├──► Attack Pool (70% = 3,500)
-│         │      └──► Class-balanced across seen attack families
-│         └──► Normal Pool (30% = 1,500)
-│                └──► Reservoir-sampled benign traffic anchor
-│
-└──► [3] Continual MLP Classifier (78 -> 256 -> 128 -> C)
-          └──► Trained on current window W_t + balanced replay batch
+              Incoming Traffic Window (W_t)
+                           |
+             +-------------+-------------+
+             |                           |
+             v                           v
+       PSI Drift Detector          Class Separation
+             |                    (Normal / Attack)
+             |                           |
+       Drift Detected?                    |
+             |                           |
+             v                           v
+       Refresh Normal              Dual-Pool Memory
+       Replay Pool                       |
+                                  +------+------+
+                                  |             |
+                                  v             v
+                             Attack Pool   Normal Pool
+                              (70%)          (30%)
+                                  |             |
+                           Class-Balanced   Reservoir
+                              Sampling       Sampling
+                                  |             |
+                                  +------+------+
+                                         |
+                                         v
+                               Replay + Current
+                                  Traffic Window
+                                         |
+                                         v
+                                  Continual MLP
+                                  Classifier
+                                         |
+                                         v
+                                  Updated Model
 ```
 
----
+The attack pool maintains class-balanced samples from observed attack classes. The normal pool stores benign traffic and is monitored for distribution changes.
 
-## Repository Structure
+The PSI detector calculates changes in normal-traffic feature distributions. When the threshold is reached, the normal pool is partially refreshed using incoming normal samples.
+
+## 3. Repository Structure
 
 ```text
 DADR-Continual-IDS/
+│
 ├── src/
-│   ├── config.py             # Global hyperparameters, paths, seeds, and scenario definitions
-│   ├── data_loader.py        # CIC-IDS2017 preprocessing, leakage-free scaling, and S1/S3 stream builders
-│   ├── model.py              # Continual MLP architecture with dynamic output head expansion
-│   ├── replay_buffer.py      # PSI drift detector, Reservoir, Class-Balanced, and Dual-Pool buffers
-│   ├── baselines.py          # Naive, Joint, EWC, LwF, ER-Reservoir, ER-ClassBalanced, Attack-Only, DADR
-│   ├── metrics.py            # Prequential/Cumulative Macro-F1, Attack Recall, FPR, False Alerts/10k, Forgetting
-│   ├── trainer.py            # Streaming window training and evaluation engine
-│   └── experiments.py        # Multi-seed benchmark runner and hyperparameter ablation suite
+│   ├── config.py
+│   ├── data_loader.py
+│   ├── model.py
+│   ├── dadr_buffer.py
+│   ├── drift_detector.py
+│   ├── baselines.py
+│   ├── trainer.py
+│   └── experiments.py
+│
 ├── scripts/
-│   ├── run_main_benchmark.py # Executes 54-checkpoint benchmark (9 methods x 2 scenarios x 3 seeds)
-│   ├── plot_results.py       # Generates publication figures (fig1 - fig4)
-│   └── run_ablation.py       # Executes S3 hyperparameter sensitivity sweeps and generates fig5
+│   ├── run_main_benchmark.py
+│   └── plot_results.py
+│
 ├── results/
 │   ├── main_benchmark_summary.csv
-│   ├── main_benchmark_raw.csv
 │   ├── main_benchmark_windows.csv
-│   ├── ablation_budget.csv
-│   ├── ablation_ratio.csv
 │   ├── ablation_psi.csv
 │   └── figures/
-│       ├── fig1_s1_vs_s3_comparison.png
-│       ├── fig2_window_trajectories.png
-│       ├── fig3_f1_vs_false_alerts_tradeoff.png
-│       ├── fig4_s3_drift_and_false_alerts.png
-│       └── fig5_ablation_study.png
+│
 ├── requirements.txt
 └── README.md
 ```
 
----
+### Main source files
 
-## Experimental Setup
+| File | Description |
+|---|---|
+| `config.py` | Experimental settings, paths, seeds, and scenario configuration |
+| `data_loader.py` | CIC-IDS2017 preprocessing and chronological stream preparation |
+| `model.py` | MLP classifier and dynamic output-layer expansion |
+| `dadr_buffer.py` | Dual-pool replay memory management |
+| `drift_detector.py` | PSI-based distribution shift detection |
+| `baselines.py` | Implementations of the comparison methods |
+| `trainer.py` | Continual training and evaluation across stream windows |
+| `experiments.py` | Experiment execution and evaluation support |
 
-- **Dataset:** CIC-IDS2017, containing 78 cleaned network flow features across benign traffic and 14 attack classes grouped into major attack families across 14 streaming windows.
+## 4. Dataset and Experimental Setup
 
-- **Evaluation Scenarios:**
-  - **Scenario S1 (Sequential Attack Introduction):** New attack families arrive sequentially with balanced normal traffic framing, testing catastrophic forgetting resistance.
-  - **Scenario S3 (Sudden Drift + Severe Class Imbalance):** Abrupt multi-attack surges combined with extreme benign/attack skew, testing false-alarm stability and drift recovery.
+### Dataset
 
-- **Protocol:** Evaluated over 3 random seeds (42, 101, 202) with fixed replay memory capacity B = 5,000, Adam optimizer (lr = 1e-3), batch size 256, and 5 epochs per streaming window.
+The experiments use the **CIC-IDS2017** dataset provided by the Canadian Institute for Cybersecurity at the University of New Brunswick.
 
----
+The dataset contains benign traffic and multiple attack types collected over five days. The experiments use the eight official MachineLearningCSV files.
 
-## Main Benchmark Results (Mean ± Std across 3 Seeds)
+The preprocessing pipeline includes:
 
-### Scenario S1: Sequential Attack Stream
+- Combining the dataset files and organizing traffic chronologically.
+- Cleaning column names and identifying the target label.
+- Normalizing benign and normal labels.
+- Removing configured identifier columns.
+- Retaining numeric features.
+- Replacing infinite values with missing values and removing rows with missing numeric features.
+- Converting feature values to `float32`.
+- Encoding normal traffic as class 0 and assigning sorted labels to attack classes.
+- Fitting the StandardScaler on the initial training period only.
 
-| Method | Final Cum. Macro-F1 | Mean Cum. Macro-F1 | Cum. Attack Recall | False Alerts / 10k | Avg. Forgetting | Runtime (s) |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Naive (Fine-Tuning)** | $0.1093 \pm 0.0052$ | $0.2460 \pm 0.0026$ | $0.2174 \pm 0.0082$ | $135.57 \pm 16.46$ | $0.5044 \pm 0.0310$ | $228.1$ |
-| **EWC** | $0.1668 \pm 0.0014$ | $0.2537 \pm 0.0014$ | $0.2248 \pm 0.0100$ | $156.99 \pm 2.23$ | $0.4410 \pm 0.0249$ | $320.5$ |
-| **LwF** | $0.1051 \pm 0.0015$ | $0.1789 \pm 0.0105$ | $0.1004 \pm 0.0114$ | **$41.28 \pm 7.31$** | $0.3817 \pm 0.0325$ | $255.2$ |
-| **ER-Reservoir** | $0.3937 \pm 0.0436$ | $0.5322 \pm 0.0179$ | $0.4702 \pm 0.0395$ | $119.60 \pm 3.48$ | $0.3251 \pm 0.0727$ | $232.6$ |
-| **ER-ClassBalanced** | **$0.6034 \pm 0.0262$** | **$0.6643 \pm 0.0100$** | **$0.7316 \pm 0.0218$** | $213.45 \pm 17.17$ | $0.1794 \pm 0.0137$ | $223.1$ |
-| **Attack-Only** | $0.5173 \pm 0.0311$ | $0.6325 \pm 0.0175$ | $0.7047 \pm 0.0482$ | $242.78 \pm 3.54$ | **$0.1751 \pm 0.0090$** | $230.6$ |
-| **DADR-NoDrift** | $0.5610 \pm 0.0359$ | $0.6551 \pm 0.0168$ | $0.7184 \pm 0.0264$ | $200.98 \pm 3.27$ | $0.1802 \pm 0.0143$ | $232.6$ |
-| **DADR (Ours)** | $0.5610 \pm 0.0359$ | $0.6551 \pm 0.0168$ | $0.7184 \pm 0.0264$ | $200.98 \pm 3.27$ | $0.1802 \pm 0.0143$ | **$213.0$** |
-| *Joint (Offline Upper Bound)* | $0.6050 \pm 0.0064$ | $0.7238 \pm 0.0151$ | $0.7167 \pm 0.0332$ | $124.10 \pm 10.06$ | $0.0672 \pm 0.0408$ | $1510.9$ |
+### Stream Construction
 
-### Scenario S3: Sudden Drift + Class-Imbalanced Stream
+The dataset is divided chronologically into an initial training period and a sequence of traffic windows.
 
-| Method | Final Cum. Macro-F1 | Mean Cum. Macro-F1 | Cum. Attack Recall | False Alerts / 10k | Avg. Forgetting | Drift Triggers | Runtime (s) |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| **Naive (Fine-Tuning)** | $0.0824 \pm 0.0331$ | $0.2194 \pm 0.0067$ | $0.2363 \pm 0.0297$ | $1588.18 \pm 245.32$ | $0.5514 \pm 0.0641$ | $0.0$ | $239.0$ |
-| **EWC** | $0.0807 \pm 0.0286$ | $0.2242 \pm 0.0053$ | $0.2395 \pm 0.0105$ | $1625.21 \pm 200.02$ | $0.4906 \pm 0.0488$ | $0.0$ | $300.8$ |
-| **LwF** | $0.0952 \pm 0.0304$ | $0.1708 \pm 0.0132$ | $0.1408 \pm 0.0141$ | $1049.85 \pm 87.79$ | $0.4605 \pm 0.0357$ | $0.0$ | $236.7$ |
-| **ER-Reservoir** | **$0.4723 \pm 0.0154$** | $0.5678 \pm 0.0273$ | $0.5411 \pm 0.0645$ | **$169.36 \pm 14.50$** | $0.2591 \pm 0.0062$ | $0.0$ | $211.2$ |
-| **ER-ClassBalanced** | $0.3002 \pm 0.0238$ | $0.5042 \pm 0.0104$ | $0.8077 \pm 0.0456$ | $1688.47 \pm 52.01$ | $0.1311 \pm 0.0113$ | $0.0$ | **$202.1$** |
-| **Attack-Only** | $0.3197 \pm 0.0016$ | $0.4942 \pm 0.0097$ | **$0.8136 \pm 0.0500$** | $1931.87 \pm 70.94$ | **$0.1219 \pm 0.0075$** | $0.0$ | $211.8$ |
-| **DADR-NoDrift** | $0.4324 \pm 0.0201$ | $0.5916 \pm 0.0072$ | $0.8017 \pm 0.0423$ | $467.93 \pm 17.69$ | $0.1289 \pm 0.0191$ | $0.0$ | $212.8$ |
-| **DADR (Ours)** | $0.4153 \pm 0.0239$ | **$0.5940 \pm 0.0063$** | $0.7954 \pm 0.0324$ | $450.18 \pm 17.88$ | $0.1889 \pm 0.0397$ | **$6.0$** | $208.8$ |
-| *Joint (Offline Upper Bound)* | $0.6431 \pm 0.0281$ | $0.7314 \pm 0.0151$ | $0.7245 \pm 0.0284$ | $72.98 \pm 6.96$ | $0.0384 \pm 0.0374$ | $0.0$ | $1511.3$ |
+| Stage | Portion |
+|---|---:|
+| Initial training period (T0) | 30% |
+| Remaining streaming data | 70% |
+| Number of sequential stream windows | 10 |
 
----
+The model is initially trained on T0. The remaining traffic is then processed one window at a time.
 
-## Visual Benchmark Summary
+For each incoming window, the model first makes predictions before adapting to that window. It is then trained using the current traffic window and stored replay samples. The replay memory is updated as part of the continual learning process.
 
-### Figure 1. Cross-Scenario Macro-F1 Comparison (S1 vs. S3)
+### Evaluation Scenarios
 
-![Figure 1: S1 vs S3 Comparison](results/figures/fig1_s1_vs_s3_comparison.png)
+**Scenario S1: Original Chronological Stream**
 
-### Figure 2. Streaming Cumulative Macro-F1 Trajectories
+Uses the original chronological traffic stream. It evaluates how the methods handle sequentially arriving attack classes and whether previously learned information is retained.
 
-![Figure 2: Window Trajectories](results/figures/fig2_window_trajectories.png)
+**Scenario S3: Controlled Normal-Traffic Feature Shift**
 
-### Figure 3. Operational Detection vs. False-Alert Pareto Trade-off
+Introduces a controlled distribution shift in normal traffic beginning with the fifth stream window. Feature values of normal traffic are shifted and scaled, while attack traffic remains unchanged.
 
-![Figure 3: F1 vs False Alerts](results/figures/fig3_f1_vs_false_alerts_tradeoff.png)
+The transformation uses a fixed random seed (42). The scale values are sampled from a uniform distribution between 1.15 and 1.45, while the shift values are sampled from a normal distribution with mean 0.65 and standard deviation 0.25.
 
-### Figure 4. Scenario S3 PSI Drift Detection and False-Alarm Suppression
+This scenario evaluates how the replay methods respond to changes in normal-traffic feature distributions.
 
-![Figure 4: S3 Drift and False Alerts](results/figures/fig4_s3_drift_and_false_alerts.png)
+### Training Configuration
 
----
+| Parameter | Value |
+|---|---|
+| Classifier | Multilayer Perceptron (MLP) |
+| Hidden layers | 256, 128 |
+| Activation | ReLU |
+| Dropout | 0.2 |
+| Optimizer | Adam |
+| Learning rate | 0.001 |
+| Batch size | 256 |
+| Epochs per window | 5 |
+| Replay memory capacity | 5,000 |
+| Attack pool allocation | 70% (3,500 samples) |
+| Normal pool allocation | 30% (1,500 samples) |
+| Main benchmark PSI threshold | 0.35 |
+| Maximum normal-pool refresh | 35% |
+| Random seeds | 42, 101, 202 |
 
-## Hyperparameter Ablation Study (Scenario S3)
+## 5. DADR Memory Management
 
-To validate DADR's architectural choices, we conducted single-factor sensitivity sweeps across **Memory Budget (B)**, **Attack/Normal Pool Split**, and **PSI Drift Threshold (tau_PSI)** on Scenario S3 using 3 random seeds.
+The replay memory has a fixed capacity of 5,000 samples.
 
-| Ablation Dimension | Setting | Mean Cum. Macro-F1 | Final Cum. Macro-F1 | Cum. Attack Recall | False Alerts / 10k | Drift Triggers |
-| --- | --- | --- | --- | --- | --- | --- |
-| **Memory Budget (B)** | $1,000$ | $0.5368 \pm 0.0137$ | $0.3198 \pm 0.0156$ | $0.7355 \pm 0.0337$ | $819.48 \pm 17.19$ | $6.33 \pm 0.58$ |
-| **Memory Budget (B)** | $2,000$ | $0.5589 \pm 0.0046$ | $0.3750 \pm 0.0195$ | $0.7694 \pm 0.0506$ | $663.00 \pm 29.57$ | $6.00 \pm 0.00$ |
-| **Memory Budget (B)** | **$5,000 (Default)$** | **$0.5940 \pm 0.0063$** | $0.4153 \pm 0.0239$ | $0.7954 \pm 0.0324$ | **$450.18 \pm 17.88$** | $6.00 \pm 0.00$ |
-| **Memory Budget (B)** | $10,000$ | $0.5931 \pm 0.0164$ | **$0.4185 \pm 0.0334$** | **$0.8084 \pm 0.0463$** | $492.01 \pm 12.96$ | $6.00 \pm 0.00$ |
-| **Pool Ratio (Att/Norm)** | $100\% / 0\%$ | $0.4942 \pm 0.0097$ | $0.3197 \pm 0.0016$ | $0.8136 \pm 0.0500$ | $1931.87 \pm 70.94$ | $0.00 \pm 0.00$ |
-| **Pool Ratio (Att/Norm)** | $80\% / 20\%$ | $0.5848 \pm 0.0063$ | $0.3941 \pm 0.0317$ | **$0.8495 \pm 0.0119$** | $646.67 \pm 16.24$ | $8.00 \pm 0.00$ |
-| **Pool Ratio (Att/Norm)** | **$70\% / 30\% (Default)$** | **$0.5940 \pm 0.0063$** | $0.4153 \pm 0.0239$ | $0.7954 \pm 0.0324$ | **$450.18 \pm 17.88$** | $6.00 \pm 0.00$ |
-| **Pool Ratio (Att/Norm)** | $50\% / 50\%$ | $0.5832 \pm 0.0119$ | **$0.4271 \pm 0.0387$** | $0.8034 \pm 0.0593$ | $484.24 \pm 17.05$ | $8.00 \pm 0.00$ |
-| **PSI Threshold (tau_PSI)** | $0.10$ | $0.5737 \pm 0.0014$ | $0.3829 \pm 0.0266$ | **$0.8201 \pm 0.0452$** | $561.78 \pm 19.55$ | $8.00 \pm 0.00$ |
-| **PSI Threshold (tau_PSI)** | $0.15$ | $0.5737 \pm 0.0014$ | $0.3829 \pm 0.0266$ | **$0.8201 \pm 0.0452$** | $561.78 \pm 19.55$ | $8.00 \pm 0.00$ |
-| **PSI Threshold (tau_PSI)** | **$0.20 (Default)$** | **$0.5940 \pm 0.0063$** | **$0.4153 \pm 0.0239$** | $0.7954 \pm 0.0324$ | **$450.18 \pm 17.88$** | $6.00 \pm 0.00$ |
-| **PSI Threshold (tau_PSI)** | $0.25$ | $0.5751 \pm 0.0025$ | $0.3891 \pm 0.0035$ | $0.8089 \pm 0.0550$ | $569.76 \pm 9.65$ | $6.67 \pm 1.15$ |
-| **PSI Threshold (tau_PSI)** | $0.30$ | $0.5749 \pm 0.0028$ | $0.3919 \pm 0.0064$ | $0.7981 \pm 0.0364$ | $572.25 \pm 12.04$ | $6.00 \pm 0.00$ |
+### Attack Pool (70%)
 
-### Figure 5. Hyperparameter Ablation Study
+The attack pool has a capacity of 3,500 samples. Its available capacity is distributed across the attack classes observed so far. When a class has more samples than its allocated quota, samples are randomly selected to maintain the allocation.
 
-![Figure 5: Hyperparameter Ablation Study](results/figures/fig5_ablation_study.png)
+### Normal Pool (30%)
 
----
+The normal pool has a capacity of 1,500 samples. Reservoir sampling is used to maintain a representative set of normal traffic during the initial filling process.
 
-## Reproducing the Experiments
+Once the pool is full, the PSI detector monitors incoming normal samples. When drift is detected, up to 35% of the normal-pool capacity can be replaced with incoming normal samples. The actual number of replacements is limited by the number of available incoming samples.
 
-### 1. Installation
+### PSI Drift Detection
+
+The detector uses 10 quantile-based bins for each feature. Reference bin boundaries are obtained from stored normal samples, and incoming normal samples are evaluated using the same bins.
+
+PSI is calculated for each feature, and the median feature-level PSI is used as the overall drift score.
+
+The main benchmark uses a threshold of **0.35**. A drift event is triggered when the median PSI reaches or exceeds this value.
+
+The detector requires at least 10 reference and 10 incoming normal samples. Features with insufficient unique reference-bin boundaries are not used to produce a non-zero PSI score.
+
+The PSI calculation does not require attack labels. However, the complete replay-buffer update uses labels to separate normal and attack traffic.
+
+## 6. Main Benchmark Results
+
+The following results are reported as mean ± standard deviation across three random seeds.
+
+### Scenario S1: Original Chronological Stream
+
+| Method | Final Cum. Macro-F1 | Mean Cum. Macro-F1 | Attack Recall | False Alerts / 10k | Forgetting | Runtime (s) |
+|---|---:|---:|---:|---:|---:|---:|
+| Naive | 0.1093 ± 0.0052 | 0.2460 ± 0.0026 | 0.2174 ± 0.0082 | 135.57 ± 16.46 | 0.5044 ± 0.0310 | 228.1 |
+| EWC | 0.1668 ± 0.0014 | 0.2537 ± 0.0014 | 0.2248 ± 0.0100 | 156.99 ± 2.23 | 0.4410 ± 0.0249 | 320.5 |
+| LwF | 0.1051 ± 0.0015 | 0.1789 ± 0.0105 | 0.1004 ± 0.0114 | 41.28 ± 7.31 | 0.3817 ± 0.0325 | 255.2 |
+| ER-Reservoir | 0.3937 ± 0.0436 | 0.5322 ± 0.0179 | 0.4702 ± 0.0395 | 119.60 ± 3.48 | 0.3251 ± 0.0727 | 232.6 |
+| ER-ClassBalanced | 0.6034 ± 0.0262 | 0.6643 ± 0.0100 | 0.7316 ± 0.0218 | 213.45 ± 17.17 | 0.1794 ± 0.0137 | 223.1 |
+| Attack-Only | 0.5173 ± 0.0311 | 0.6325 ± 0.0175 | 0.7046 ± 0.0482 | 242.78 ± 3.54 | 0.1751 ± 0.0090 | 230.6 |
+| DADR-NoDrift | 0.5610 ± 0.0359 | 0.6551 ± 0.0168 | 0.7184 ± 0.0264 | 200.98 ± 3.27 | 0.1802 ± 0.0143 | 232.6 |
+| **DADR** | **0.5610 ± 0.0359** | **0.6551 ± 0.0168** | **0.7184 ± 0.0264** | **200.98 ± 3.27** | **0.1802 ± 0.0143** | **213.0** |
+| Joint (Offline Reference) | 0.6050 ± 0.0064 | 0.7238 ± 0.0151 | 0.7167 ± 0.0332 | 124.10 ± 10.06 | 0.0672 ± 0.0408 | 1510.9 |
+
+DADR and DADR-NoDrift produce the same evaluation metrics in S1 because no drift events were triggered in this scenario.
+
+### Scenario S3: Controlled Normal-Traffic Feature Shift
+
+| Method | Final Cum. Macro-F1 | Mean Cum. Macro-F1 | Attack Recall | False Alerts / 10k | Forgetting | Triggers | Runtime (s) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Naive | 0.0824 ± 0.0331 | 0.2194 ± 0.0067 | 0.2363 ± 0.0297 | 1588.18 ± 245.32 | 0.5514 ± 0.0641 | 0 | 239.0 |
+| EWC | 0.0807 ± 0.0286 | 0.2242 ± 0.0053 | 0.2395 ± 0.0105 | 1625.21 ± 200.02 | 0.4906 ± 0.0488 | 0 | 300.8 |
+| LwF | 0.0952 ± 0.0304 | 0.1708 ± 0.0132 | 0.1408 ± 0.0141 | 1049.85 ± 87.79 | 0.4605 ± 0.0357 | 0 | 236.7 |
+| ER-Reservoir | 0.4723 ± 0.0154 | 0.5678 ± 0.0273 | 0.5411 ± 0.0645 | **169.36 ± 14.50** | 0.2591 ± 0.0062 | 0 | 211.2 |
+| ER-ClassBalanced | 0.3002 ± 0.0238 | 0.5042 ± 0.0104 | 0.8077 ± 0.0456 | 1688.47 ± 52.01 | 0.1311 ± 0.0113 | 0 | 202.1 |
+| Attack-Only | 0.3197 ± 0.0016 | 0.4942 ± 0.0097 | **0.8136 ± 0.0500** | 1931.87 ± 70.94 | **0.1219 ± 0.0075** | 0 | 211.8 |
+| DADR-NoDrift | **0.4324 ± 0.0201** | 0.5916 ± 0.0072 | 0.8017 ± 0.0423 | 467.93 ± 17.69 | 0.1289 ± 0.0191 | 0 | 212.8 |
+| **DADR** | 0.4153 ± 0.0239 | **0.5940 ± 0.0063** | 0.7954 ± 0.0324 | 450.18 ± 17.88 | 0.1889 ± 0.0397 | **6** | 208.8 |
+| Joint (Offline Reference) | 0.6431 ± 0.0281 | 0.7314 ± 0.0151 | 0.7245 ± 0.0284 | 72.98 ± 6.96 | 0.0384 ± 0.0374 | 0 | 1511.3 |
+
+DADR achieves the highest mean cumulative Macro-F1 among the online methods in S3. Compared with DADR-NoDrift, it records slightly fewer false alerts, although its final cumulative Macro-F1 and attack recall are lower.
+
+The Joint method is an offline reference that uses all available data and is not directly comparable to the online methods in terms of training conditions.
+
+**Evaluation note:** Cumulative metrics are calculated after adaptation using subsets of the initial training data and previously observed stream windows. They measure post-adaptation performance on observed data and should not be interpreted as independent test performance. Prequential predictions are made before training on each incoming window and provide a more direct measure of performance on newly arriving traffic.
+
+## 7. Visual Results
+
+### Figure 1. Comparison Across S1 and S3
+
+![S1 and S3 comparison](results/figures/fig1_s1_vs_s3_comparison.png)
+
+### Figure 2. Cumulative Macro-F1 Across Stream Windows
+
+![Window trajectories](results/figures/fig2_window_trajectories.png)
+
+### Figure 3. Detection Performance and False-Alert Trade-off
+
+![F1 versus false alerts](results/figures/fig3_f1_vs_false_alerts_tradeoff.png)
+
+### Figure 4. Drift Detection and False Alerts in S3
+
+![S3 drift and false alerts](results/figures/fig4_s3_drift_and_false_alerts.png)
+
+## 8. Hyperparameter Ablation
+
+Ablation experiments were conducted on S3 to examine the effect of replay memory capacity, attack-to-normal pool ratio, and PSI threshold.
+
+### Memory Budget
+
+| Capacity | Mean Cum. Macro-F1 | Final Cum. Macro-F1 | Attack Recall | False Alerts / 10k |
+|---|---:|---:|---:|---:|
+| 1,000 | 0.5368 ± 0.0137 | 0.3198 ± 0.0156 | 0.7355 ± 0.0337 | 819.48 ± 17.19 |
+| 2,000 | 0.5589 ± 0.0046 | 0.3750 ± 0.0195 | 0.7694 ± 0.0506 | 663.00 ± 29.57 |
+| **5,000** | **0.5940 ± 0.0063** | 0.4153 ± 0.0239 | 0.7954 ± 0.0324 | **450.18 ± 17.88** |
+| 10,000 | 0.5931 ± 0.0164 | **0.4185 ± 0.0334** | **0.8084 ± 0.0463** | 492.01 ± 12.96 |
+
+### Attack-to-Normal Pool Ratio
+
+| Attack / Normal | Mean Cum. Macro-F1 | Final Cum. Macro-F1 | Attack Recall | False Alerts / 10k |
+|---|---:|---:|---:|---:|
+| 100% / 0% | 0.4942 ± 0.0097 | 0.3197 ± 0.0016 | 0.8136 ± 0.0500 | 1931.87 ± 70.94 |
+| 80% / 20% | 0.5848 ± 0.0063 | 0.3941 ± 0.0317 | **0.8495 ± 0.0119** | 646.67 ± 16.24 |
+| **70% / 30%** | **0.5940 ± 0.0063** | 0.4153 ± 0.0239 | 0.7954 ± 0.0324 | **450.18 ± 17.88** |
+| 50% / 50% | 0.5832 ± 0.0119 | **0.4271 ± 0.0387** | 0.8034 ± 0.0593 | 484.24 ± 17.05 |
+
+### PSI Threshold
+
+| PSI Threshold | Mean Cum. Macro-F1 | Final Cum. Macro-F1 | Attack Recall | False Alerts / 10k | Triggers |
+|---|---:|---:|---:|---:|---:|
+| 0.10 | 0.5737 ± 0.0014 | 0.3829 ± 0.0266 | 0.8201 ± 0.0452 | 561.78 ± 19.55 | 8.00 |
+| 0.15 | 0.5737 ± 0.0014 | 0.3829 ± 0.0266 | 0.8201 ± 0.0452 | 561.78 ± 19.55 | 8.00 |
+| 0.20 | **0.5940 ± 0.0063** | **0.4153 ± 0.0239** | 0.7954 ± 0.0324 | **450.18 ± 17.88** | 6.00 |
+| 0.25 | 0.5751 ± 0.0025 | 0.3891 ± 0.0035 | 0.8089 ± 0.0550 | 569.76 ± 9.65 | 6.67 |
+| 0.30 | 0.5749 ± 0.0028 | 0.3919 ± 0.0064 | 0.7981 ± 0.0364 | 572.25 ± 12.04 | 6.00 |
+
+The PSI threshold values in this table are separate ablation settings. The main benchmark configuration uses a threshold of **0.35**.
+
+### Figure 5. Hyperparameter Ablation Results
+
+![Hyperparameter ablation](results/figures/fig5_ablation_study.png)
+
+## 9. Reproducing the Experiments
+
+### Requirements
+
+The project uses Python 3.10 or later and PyTorch 2.0 or later. The dependencies are listed in `requirements.txt`.
+
+The original experiments were run in Google Colab using an NVIDIA Tesla T4 GPU with 16 GB of VRAM.
+
+### Step 1. Clone the Repository
 
 ```bash
 git clone https://github.com/ayesha-ml/DADR-Continual-IDS.git
 cd DADR-Continual-IDS
+```
+
+### Step 2. Install Dependencies
+
+```bash
 pip install -r requirements.txt
 ```
 
-### 2. Dataset Preparation
+### Step 3. Prepare the Dataset
 
-Download the official **CIC-IDS2017** MachineLearningCSV archive from the Canadian Institute for Cybersecurity and place the 8 CSV files inside `raw_data/cicids2017/` (configured via `Config.RAW_DATA_DIR` in `src/config.py`).
+Download the official CIC-IDS2017 MachineLearningCSV dataset from:
 
-### 3. Run Full Benchmark and Generate Figures
+https://www.unb.ca/cic/datasets/ids-2017.html
 
-```bash
-# Execute the 54-checkpoint main benchmark across scenarios S1 and S3
-python -m scripts.run_main_benchmark
+Place the eight CSV files in:
 
-# Generate Figures 1 through 4
-python -m scripts.plot_results
-
-# Execute Scenario S3 hyperparameter ablation and generate Figure 5
-python -m scripts.run_ablation
+```text
+raw_data/cicids2017/
 ```
 
----
+The dataset directory should match the path configured in `src/config.py`.
 
-## Acknowledgements
+### Step 4. Run the Main Benchmark
+
+```bash
+python -m scripts.run_main_benchmark
+```
+
+This runs the main benchmark across the two scenarios, nine methods, and three random seeds.
+
+### Step 5. Generate Figures
+
+```bash
+python -m scripts.plot_results
+```
+
+The experiment results and generated figures are saved in the repository's results directory.
+
+**Note:** Exact numerical results may vary across hardware, library versions, and sources of randomness. The reported results are based on the experimental configuration and seeds listed above.
+
+## 10. Limitations
+
+The current experiments have several limitations:
+
+- Evaluation is limited to CIC-IDS2017.
+- S3 uses a controlled shift in normal-traffic features and does not represent every type of real network drift.
+- The complete replay-buffer update requires class labels to separate normal and attack traffic.
+- Cumulative metrics include previously observed data and should not be treated as independent test results.
+- The experiments use three random seeds, and further evaluation on additional datasets and drift conditions is needed.
+
+These limitations provide directions for future work, including testing on additional intrusion detection datasets, evaluating more types of concept drift, and investigating settings with delayed or unavailable labels.
+
+## 11. Acknowledgements
 
 The experiments use the CIC-IDS2017 dataset provided by the Canadian Institute for Cybersecurity at the University of New Brunswick.
+
